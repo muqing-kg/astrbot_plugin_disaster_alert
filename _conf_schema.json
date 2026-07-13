@@ -1,0 +1,138 @@
+{
+  "enabled": {
+    "description": "启用灾害及时监测推送",
+    "type": "bool",
+    "default": true,
+    "hint": "总开关。关闭后停止所有主动推送轮询"
+  },
+  "poll_interval_seconds": {
+    "description": "及时轮询间隔（秒）",
+    "type": "int",
+    "default": 120,
+    "hint": "建议 60~300"
+  },
+  "platform_prefix": {
+    "description": "群会话前缀",
+    "type": "string",
+    "default": "aiocqhttp:GroupMessage",
+    "hint": "纯群号会拼成：前缀:群号"
+  },
+  "target_groups": {
+    "description": "推送目标群",
+    "type": "list",
+    "items": { "type": "string" },
+    "default": [],
+    "hint": "群号或完整会话 ID，如 aiocqhttp:GroupMessage:123456789"
+  },
+  "startup_skip_history": {
+    "description": "启动时跳过历史",
+    "type": "bool",
+    "default": true,
+    "hint": "首次只建基线，不刷旧事件"
+  },
+  "max_push_per_cycle": {
+    "description": "每轮最多推送条数",
+    "type": "int",
+    "default": 8,
+    "hint": "防止短时间刷屏"
+  },
+  "earthquake": {
+    "description": "地震及时推送",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "启用地震推送",
+        "type": "bool",
+        "default": true,
+        "hint": "开关：是否主动推送国内地震"
+      },
+      "min_magnitude": {
+        "description": "最小震级",
+        "type": "float",
+        "default": 4.5,
+        "hint": "全国群建议 4.5 或 5.0"
+      }
+    }
+  },
+  "typhoon": {
+    "description": "台风及时推送",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "启用台风推送",
+        "type": "bool",
+        "default": true,
+        "hint": "开关：是否主动推送国内相关台风"
+      },
+      "only_active": {
+        "description": "仅监测活动台风",
+        "type": "bool",
+        "default": true
+      }
+    }
+  },
+  "tsunami": {
+    "description": "海啸/海洋及时推送",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "启用海啸/海洋推送",
+        "type": "bool",
+        "default": true,
+        "hint": "开关：是否主动推送国内海洋/海啸相关预警"
+      },
+      "use_nmc_ocean": {
+        "description": "中央气象台海洋灾害预警",
+        "type": "bool",
+        "default": true
+      },
+      "use_jma": {
+        "description": "日本气象厅海啸信息",
+        "type": "bool",
+        "default": false,
+        "hint": "仅当内容明确涉及中国近海时才会推送；默认关闭"
+      },
+      "jma_max_age_hours": {
+        "description": "JMA 最大时效（小时）",
+        "type": "int",
+        "default": 48
+      },
+      "nmc_min_level": {
+        "description": "NMC 海洋预警最低等级",
+        "type": "string",
+        "default": "橙色",
+        "hint": "蓝色/黄色/橙色/红色"
+      }
+    }
+  },
+  "critical_weather": {
+    "description": "极危红色天气及时推送",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "启用极危红色天气推送",
+        "type": "bool",
+        "default": true,
+        "hint": "开关：是否主动推送红色高危天气。默认发图片，失败降级文字"
+      },
+      "keywords": {
+        "description": "高危类型关键词",
+        "type": "string",
+        "default": "暴雨,台风,暴雪,寒潮,大风,强对流,冰雹,雷雨大风,山洪,地质灾害,森林火险,沙尘暴,道路结冰",
+        "hint": "仅当标题含这些词且为红色时才主动推送"
+      }
+    }
+  },
+  "weather_query": {
+    "description": "地区天气查询（用户主动请求）",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "启用天气查询命令",
+        "type": "bool",
+        "default": true,
+        "hint": "命令：/天气 北京"
+      }
+    }
+  }
+}
