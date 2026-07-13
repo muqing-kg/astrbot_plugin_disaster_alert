@@ -125,38 +125,6 @@ def nearest_region(lat: float, lon: float) -> str:
     return best
 
 
-def summarize_typhoon_impact(points: list[dict], latest: dict | None = None) -> dict:
-    """根据路径点估算影响/邻近区域。"""
-    regions = []
-    seen = set()
-    for p in points[-40:]:
-        try:
-            la = float(p.get("lat"))
-            lo = float(p.get("lon"))
-        except Exception:
-            continue
-        if not in_china_bbox(la, lo):
-            continue
-        name = nearest_city(la, lo)
-        if name and name not in seen:
-            seen.add(name)
-            regions.append(name)
-    current = ""
-    if latest:
-        try:
-            current = nearest_city(float(latest.get("lat")), float(latest.get("lon")))
-        except Exception:
-            current = ""
-    # 重点区域：当前所在 + 最近若干
-    focus = []
-    if current:
-        focus.append(current)
-    for r in regions:
-        if r not in focus:
-            focus.append(r)
-        if len(focus) >= 6:
-            break
-    return {"current": current, "regions": focus}
 
 
 # 主要城市锚点（用于台风位置细化到市；示意级最近点匹配）
@@ -264,3 +232,117 @@ def intensity_cn_with_wind(intensity_code: str, wind_ms) -> str:
     if wind_lv:
         return f"{base}（近中心风力{wind_lv}，{wind_ms} m/s）"
     return base
+
+
+
+# 城市到省份映射（用于显示 省·市）
+CITY_TO_PROVINCE = {
+    "北京市": "北京市", "天津市": "天津市", "上海市": "上海市", "重庆市": "重庆市",
+    "石家庄市": "河北省", "唐山市": "河北省", "秦皇岛市": "河北省", "保定市": "河北省", "沧州市": "河北省", "廊坊市": "河北省",
+    "太原市": "山西省", "大同市": "山西省",
+    "呼和浩特市": "内蒙古自治区",
+    "沈阳市": "辽宁省", "大连市": "辽宁省", "鞍山市": "辽宁省", "锦州市": "辽宁省", "营口市": "辽宁省", "丹东市": "辽宁省",
+    "长春市": "吉林省", "吉林市": "吉林省",
+    "哈尔滨市": "黑龙江省",
+    "南京市": "江苏省", "苏州市": "江苏省", "无锡市": "江苏省", "常州市": "江苏省", "南通市": "江苏省", "盐城市": "江苏省",
+    "扬州市": "江苏省", "镇江市": "江苏省", "泰州市": "江苏省", "徐州市": "江苏省", "淮安市": "江苏省", "连云港市": "江苏省", "宿迁市": "江苏省",
+    "杭州市": "浙江省", "宁波市": "浙江省", "温州市": "浙江省", "嘉兴市": "浙江省", "湖州市": "浙江省", "绍兴市": "浙江省",
+    "金华市": "浙江省", "台州市": "浙江省", "舟山市": "浙江省", "丽水市": "浙江省",
+    "合肥市": "安徽省", "芜湖市": "安徽省", "蚌埠市": "安徽省", "安庆市": "安徽省",
+    "福州市": "福建省", "厦门市": "福建省", "泉州市": "福建省", "漳州市": "福建省",
+    "南昌市": "江西省", "九江市": "江西省", "赣州市": "江西省",
+    "济南市": "山东省", "青岛市": "山东省", "烟台市": "山东省", "潍坊市": "山东省", "临沂市": "山东省", "日照市": "山东省",
+    "威海市": "山东省", "东营市": "山东省", "滨州市": "山东省", "德州市": "山东省", "菏泽市": "山东省", "济宁市": "山东省", "淄博市": "山东省",
+    "郑州市": "河南省", "洛阳市": "河南省", "南阳市": "河南省",
+    "武汉市": "湖北省", "宜昌市": "湖北省", "襄阳市": "湖北省",
+    "长沙市": "湖南省", "岳阳市": "湖南省", "衡阳市": "湖南省",
+    "广州市": "广东省", "深圳市": "广东省", "珠海市": "广东省", "汕头市": "广东省", "湛江市": "广东省", "茂名市": "广东省",
+    "阳江市": "广东省", "江门市": "广东省", "中山市": "广东省", "东莞市": "广东省", "惠州市": "广东省", "清远市": "广东省",
+    "南宁市": "广西壮族自治区", "北海市": "广西壮族自治区", "防城港市": "广西壮族自治区",
+    "海口市": "海南省", "三亚市": "海南省",
+    "成都市": "四川省", "绵阳市": "四川省",
+    "贵阳市": "贵州省", "昆明市": "云南省", "拉萨市": "西藏自治区",
+    "西安市": "陕西省", "兰州市": "甘肃省", "西宁市": "青海省", "银川市": "宁夏回族自治区", "乌鲁木齐市": "新疆维吾尔自治区",
+    "台北市": "台湾省", "香港": "香港特别行政区", "澳门": "澳门特别行政区",
+    "东海海域": "东海海域", "南海海域": "南海海域", "黄海海域": "黄海海域", "渤海海域": "渤海海域",
+}
+
+
+def format_region_name(city_or_region: str) -> str:
+    name = str(city_or_region or "").strip()
+    if not name:
+        return ""
+    # 已是省级或海域
+    if name.endswith(("省", "自治区", "特别行政区", "海域")) or name in {"北京市", "天津市", "上海市", "重庆市"}:
+        return name
+    prov = CITY_TO_PROVINCE.get(name)
+    if prov:
+        # 直辖市不重复
+        if prov == name:
+            return name
+        return f"{prov}·{name}"
+    return name
+
+
+def summarize_typhoon_impact(points: list[dict], latest: dict | None = None, forecast_points: list[dict] | None = None) -> dict:
+    """根据实况路径 + 预报点估算当前/重点/即将过境区域。"""
+    def collect(pts: list[dict]) -> list[str]:
+        out, seen = [], set()
+        for p in pts:
+            try:
+                la = float(p.get("lat")); lo = float(p.get("lon"))
+            except Exception:
+                continue
+            if not in_china_bbox(la, lo):
+                continue
+            name = nearest_city(la, lo)
+            if name and name not in seen:
+                seen.add(name)
+                out.append(name)
+        return out
+
+    hist = points[-40:] if points else []
+    regions = collect(hist)
+    current = ""
+    if latest:
+        try:
+            current = nearest_city(float(latest.get("lat")), float(latest.get("lon")))
+        except Exception:
+            current = ""
+
+    # 即将过境：优先用预报点；没有预报时用路径前向外推附近未到达区域
+    upcoming = []
+    if forecast_points:
+        upcoming = collect(forecast_points)
+    else:
+        # 无官方预报点时，用最近移动方向简单外推 3~4 步
+        if len(hist) >= 2:
+            try:
+                a = hist[-2]; b = hist[-1]
+                dlat = float(b.get("lat")) - float(a.get("lat"))
+                dlon = float(b.get("lon")) - float(a.get("lon"))
+                la = float(b.get("lat")); lo = float(b.get("lon"))
+                synth = []
+                for i in range(1, 5):
+                    synth.append({"lat": la + dlat * i, "lon": lo + dlon * i})
+                upcoming = collect(synth)
+            except Exception:
+                upcoming = []
+
+    # 去掉当前点，保留后续
+    upcoming = [r for r in upcoming if r and r != current]
+    # 重点区域：当前 + 实况邻近 + 即将
+    focus = []
+    for r in ([current] if current else []) + regions + upcoming:
+        if r and r not in focus:
+            focus.append(r)
+        if len(focus) >= 8:
+            break
+    return {
+        "current": current,
+        "current_label": format_region_name(current) if current else "",
+        "regions": focus,
+        "regions_label": [format_region_name(x) for x in focus],
+        "upcoming": upcoming[:6],
+        "upcoming_label": [format_region_name(x) for x in upcoming[:6]],
+    }

@@ -53,6 +53,7 @@ async def fetch_typhoons(
         detail = await _fetch_detail(client, info["tid"])
         latest = detail.get("latest") if detail else None
         points = detail.get("points") if detail else []
+        forecast_points = detail.get("forecast_points") if detail else []
         # 仅保留路径影响中国近海/陆地的台风
         if points and not is_china_related_typhoon(points):
             continue
@@ -93,16 +94,25 @@ async def fetch_typhoons(
         speed = latest.get("speed")
         intensity_cn = intensity_cn_with_wind(str(intensity), wind)
 
-        impact = summarize_typhoon_impact(points if isinstance(points, list) else [], latest)
+        impact = summarize_typhoon_impact(points if isinstance(points, list) else [], latest, forecast_points if isinstance(forecast_points, list) else [])
         parts = []
-        if impact.get("current"):
-            parts.append(f"当前靠近 {impact['current']}")
+        cur_label = impact.get("current_label") or impact.get("current")
+        if cur_label:
+            parts.append(f"当前靠近 {cur_label}")
         if pressure is not None:
             parts.append(f"中心气压 {pressure} hPa")
         if move or speed is not None:
             parts.append(f"移向移速 {move or '-'} {speed if speed is not None else '-'} km/h")
-        if impact.get("regions"):
-            parts.append("重点关注：" + "、".join(impact["regions"][:6]))
+        upcoming = impact.get("upcoming_label") or []
+        focus = impact.get("regions_label") or impact.get("regions") or []
+        # 重点关注去掉即将过境已列出的，避免重复
+        focus_only = [x for x in focus if x not in set(upcoming)]
+        if upcoming:
+            parts.append("即将过境：" + "、".join(upcoming[:6]))
+        if focus_only:
+            parts.append("重点关注：" + "、".join(focus_only[:6]))
+        elif focus and not upcoming:
+            parts.append("重点关注：" + "、".join(focus[:6]))
 
         events.append(
             DisasterEvent(
@@ -112,14 +122,15 @@ async def fetch_typhoons(
                 title=f"台风 {info['cname'] or info['ename']} 路径更新",
                 summary="；".join(parts),
                 occurred_at=str(latest.get("time_text") or latest.get("time_code") or ""),
-                location=((str(impact.get('current') or '') + f"（{lon}E, {lat}N）") if (lon is not None and lat is not None and impact.get('current')) else (f"{lon}E, {lat}N" if lon is not None and lat is not None else "")),
+                location=((impact.get("current_label") or impact.get("current") or "") + (f"（{lon}E, {lat}N）" if lon is not None and lat is not None else "")),
+
                 level=intensity_cn,
                 url=TYPHOON_PAGE,
                 advice=(
                     "【安全忠告】关注台风路径与登陆影响，加固门窗、远离广告牌与临时搭建物；"
                     "沿海与低洼地区提前避险，勿在风浪中观潮。"
                 ),
-                raw={"list": info, "latest": latest, "points": points if isinstance(points, list) else []},
+                raw={"list": info, "latest": latest, "points": points if isinstance(points, list) else [], "forecast_points": forecast_points if isinstance(forecast_points, list) else []},
             )
         )
     return events
@@ -156,6 +167,7 @@ def _parse_list_row(row: Any) -> dict[str, Any] | None:
     }
 
 
+
 def _parse_detail(data: Any) -> dict[str, Any]:
     if not isinstance(data, dict):
         return {}
@@ -167,30 +179,60 @@ def _parse_detail(data: Any) -> dict[str, Any]:
         return {}
 
     parsed_points: list[dict[str, Any]] = []
+    forecast_points: list[dict[str, Any]] = []
     for pt in points:
         if not isinstance(pt, list) or len(pt) < 10:
             continue
         time_text = ""
         if len(pt) > 12 and isinstance(pt[12], list) and pt[12]:
             time_text = str(pt[12][1] if len(pt[12]) > 1 else pt[12][0])
-        parsed_points.append(
-            {
-                "point_id": pt[0],
-                "time_code": pt[1],
-                "time_text": time_text or _pretty_time(str(pt[1])),
-                "intensity": pt[3],
-                "lon": pt[4],
-                "lat": pt[5],
-                "pressure": pt[6],
-                "wind": pt[7],
-                "move": pt[8],
-                "speed": pt[9],
-            }
-        )
+        item = {
+            "point_id": pt[0],
+            "time_code": pt[1],
+            "time_text": time_text or _pretty_time(str(pt[1])),
+            "intensity": pt[3],
+            "lon": pt[4],
+            "lat": pt[5],
+            "pressure": pt[6],
+            "wind": pt[7],
+            "move": pt[8],
+            "speed": pt[9],
+        }
+        parsed_points.append(item)
+
+        # 预报点通常在 pt[11] 的 dict 中，如 {"BABJ":[[hour, time, lon, lat, pressure, wind, src, intensity], ...]}
+        if len(pt) > 11 and isinstance(pt[11], dict):
+            # 优先中央台 BABJ
+            seq = pt[11].get("BABJ") or next(iter(pt[11].values()), None)
+            if isinstance(seq, list):
+                for fp in seq:
+                    if not isinstance(fp, list) or len(fp) < 6:
+                        continue
+                    # [hour, yyyymmddHHMM, lon, lat, pressure, wind, agency, intensity]
+                    try:
+                        forecast_points.append(
+                            {
+                                "hour": fp[0],
+                                "time_code": fp[1],
+                                "lon": float(fp[2]),
+                                "lat": float(fp[3]),
+                                "pressure": fp[4],
+                                "wind": fp[5],
+                                "intensity": fp[7] if len(fp) > 7 else "",
+                            }
+                        )
+                    except Exception:
+                        continue
+
     if not parsed_points:
         return {}
     latest = parsed_points[-1]
-    return {"latest": latest, "points": parsed_points}
+    # 仅保留“最新实况点”对应的预报（取最后一次解析到的预报序列）
+    # 上面循环会累积多次，截成最后一段更合理：按 hour 排序去重
+    if forecast_points:
+        # 只取最后一次出现的连续预报：按添加顺序尾部 12 个左右
+        forecast_points = forecast_points[-12:]
+    return {"latest": latest, "points": parsed_points, "forecast_points": forecast_points}
 
 
 def _pretty_time(code: str) -> str:
