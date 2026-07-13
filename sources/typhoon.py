@@ -9,7 +9,7 @@ from astrbot.api import logger
 
 from ..http_client import HttpClient
 from ..models import DisasterEvent
-from ..geo_utils import is_china_related_typhoon, summarize_typhoon_impact, intensity_cn_with_wind, nearest_city
+from ..geo_utils import is_china_related_typhoon, summarize_typhoon_impact, intensity_cn_with_wind
 
 TYPHOON_LIST_URL = "https://typhoon.nmc.cn/weatherservice/typhoon/jsons/list_default"
 TYPHOON_VIEW_URL = "https://typhoon.nmc.cn/weatherservice/typhoon/jsons/view_{tid}"
@@ -60,76 +60,69 @@ async def fetch_typhoons(
         if not latest:
             # 无详情/路径点时无法判断是否影响国内，跳过
             continue
-            event_id = f"typhoon-{info['tid']}-{info['status']}-{info.get('ename')}"
-            title = f"台风 {info['cname'] or info['ename']}（{info.get('tfid') or info['tid']}）"
-            summary = f"英文名 {info['ename']}；状态 {info['status']}"
-            events.append(
-                DisasterEvent(
-                    source="中央气象台台风网",
-                    category="台风动态",
-                    event_id=event_id,
-                    title=title,
-                    summary=summary,
-                    location="",
-                    level=info.get("status", ""),
-                    url=TYPHOON_PAGE,
-                    advice=(
-                        "【安全忠告】关注台风路径与登陆影响，加固门窗、远离广告牌与临时搭建物；"
-                        "沿海与低洼地区提前避险，勿在风浪中观潮。"
-                    ),
-                    raw=info,
-                )
-            )
-            continue
 
-        # 以最新路径点作为事件，路径更新即新推送
-        # 用业务字段做稳定 ID，避免 point_id 异常导致重复推
+        # 仅在“影响区域变化”或“强度变化”时形成新事件，避免同城反复刷
         time_code = str(latest.get("time_code") or latest.get("time_text") or "")
         lat = latest.get("lat")
         lon = latest.get("lon")
         wind = latest.get("wind")
         pressure = latest.get("pressure")
         intensity = latest.get("intensity") or ""
-        event_id = (
-            f"typhoon-{info['tid']}-{time_code}-{lat}-{lon}-{wind}-{pressure}-{intensity}"
-        )
         move = latest.get("move")
         speed = latest.get("speed")
         intensity_cn = intensity_cn_with_wind(str(intensity), wind)
 
-        impact = summarize_typhoon_impact(points if isinstance(points, list) else [], latest, forecast_points if isinstance(forecast_points, list) else [])
+        impact = summarize_typhoon_impact(
+            points if isinstance(points, list) else [],
+            latest,
+            forecast_points if isinstance(forecast_points, list) else [],
+        )
+        near_land = bool(impact.get("near_land"))
+        impact_text = str(impact.get("impact_text") or "")
+        region_key = str(impact.get("region_key") or "far")
+
+        # 去重键：同一台风 + 影响区域 + 强度/风力
+        event_id = f"typhoon-{info['tid']}-{region_key}-{intensity}-{wind}"
+
         parts = []
+        if near_land and impact_text:
+            parts.append(f"影响范围：{impact_text}")
         if pressure is not None:
             parts.append(f"中心气压 {pressure} hPa")
         if move or speed is not None:
             parts.append(f"移向移速 {move or '-'} {speed if speed is not None else '-'} km/h")
-        # 只给下一站（即将过境取第 1 个）
-        upcoming = impact.get("upcoming_label") or impact.get("upcoming") or []
-        next_stop = ""
-        for x in upcoming:
-            if x and x != (impact.get("current_label") or impact.get("current")):
-                next_stop = x
-                break
-        if next_stop:
-            parts.append(f"即将过境：{next_stop}")
+
+        # 标题：近岸用影响播报，远海仅强度变化时提示
+        cname = info.get("cname") or info.get("ename") or "台风"
+        if near_land and impact_text:
+            title = f"台风 {cname} 影响更新"
+            location = impact_text
+        else:
+            title = f"台风 {cname} 动态"
+            location = "远海活动"
 
         events.append(
             DisasterEvent(
                 source="中央气象台台风网",
                 category="台风动态",
                 event_id=event_id,
-                title=f"台风 {info['cname'] or info['ename']} 路径更新",
+                title=title,
                 summary="；".join(parts),
                 occurred_at=str(latest.get("time_text") or latest.get("time_code") or ""),
-                location=(impact.get("current_label") or impact.get("current") or ""),
-
+                location=location,
                 level=intensity_cn,
                 url=TYPHOON_PAGE,
                 advice=(
                     "【安全忠告】关注台风路径与登陆影响，加固门窗、远离广告牌与临时搭建物；"
                     "沿海与低洼地区提前避险，勿在风浪中观潮。"
                 ),
-                raw={"list": info, "latest": latest, "points": points if isinstance(points, list) else [], "forecast_points": forecast_points if isinstance(forecast_points, list) else []},
+                raw={
+                    "list": info,
+                    "latest": latest,
+                    "points": points if isinstance(points, list) else [],
+                    "forecast_points": forecast_points if isinstance(forecast_points, list) else [],
+                    "impact": impact,
+                },
             )
         )
     return events

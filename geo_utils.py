@@ -284,65 +284,106 @@ def format_region_name(city_or_region: str) -> str:
     return name
 
 
-def summarize_typhoon_impact(points: list[dict], latest: dict | None = None, forecast_points: list[dict] | None = None) -> dict:
-    """根据实况路径 + 预报点估算当前/重点/即将过境区域。"""
-    def collect(pts: list[dict]) -> list[str]:
-        out, seen = [], set()
-        for p in pts:
-            try:
-                la = float(p.get("lat")); lo = float(p.get("lon"))
-            except Exception:
-                continue
-            if not in_china_bbox(la, lo):
-                continue
-            name = nearest_city(la, lo)
-            if name and name not in seen:
-                seen.add(name)
-                out.append(name)
-        return out
+def is_near_china_coast_or_land(lat: float, lon: float) -> bool:
+    """是否接近中国近岸/陆地影响区（粗判，用于决定是否播报地区）。"""
+    if not in_china_bbox(lat, lon):
+        return False
+    # 远离陆地的远海：大致东经 125 以东且纬度 20~33 的开阔洋面
+    if lon >= 126 and 18 <= lat <= 34:
+        return False
+    if lon >= 128 and lat < 40:
+        return False
+    return True
 
-    hist = points[-40:] if points else []
-    regions = collect(hist)
-    current = ""
-    if latest:
-        try:
-            current = nearest_city(float(latest.get("lat")), float(latest.get("lon")))
-        except Exception:
-            current = ""
 
-    # 即将过境：优先用预报点；没有预报时用路径前向外推附近未到达区域
-    upcoming = []
-    if forecast_points:
-        upcoming = collect(forecast_points)
-    else:
-        # 无官方预报点时，用最近移动方向简单外推 3~4 步
-        if len(hist) >= 2:
-            try:
-                a = hist[-2]; b = hist[-1]
-                dlat = float(b.get("lat")) - float(a.get("lat"))
-                dlon = float(b.get("lon")) - float(a.get("lon"))
-                la = float(b.get("lat")); lo = float(b.get("lon"))
-                synth = []
-                for i in range(1, 5):
-                    synth.append({"lat": la + dlat * i, "lon": lo + dlon * i})
-                upcoming = collect(synth)
-            except Exception:
-                upcoming = []
+def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    r = 6371.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlmb = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlmb / 2) ** 2
+    return 2 * r * math.asin(min(1.0, math.sqrt(a)))
 
-    # 去掉当前点，保留后续
-    upcoming = [r for r in upcoming if r and r != current]
-    # 重点区域：当前 + 实况邻近 + 即将
-    focus = []
-    for r in ([current] if current else []) + regions + upcoming:
-        if r and r not in focus:
-            focus.append(r)
-        if len(focus) >= 8:
+
+def top_impact_cities(lat: float, lon: float, *, limit: int = 2, max_km: float = 280.0) -> list[str]:
+    """按距离选取受影响最重的 1~2 个城市（省·市）。"""
+    ranked = []
+    for name, pla, plo in CITY_ANCHORS:
+        # 跳过纯海域标签，优先具体城市
+        if name.endswith("海域"):
+            continue
+        d = haversine_km(lat, lon, pla, plo)
+        if d <= max_km:
+            ranked.append((d, name))
+    ranked.sort(key=lambda x: x[0])
+    out = []
+    for d, name in ranked:
+        label = format_region_name(name)
+        if label and label not in out:
+            out.append(label)
+        if len(out) >= limit:
             break
+    # 若近距没有城市，退回最近一个（可能是海域）
+    if not out:
+        name = nearest_city(lat, lon)
+        if name:
+            out = [format_region_name(name)]
+    return out
+
+
+def summarize_typhoon_impact(points: list[dict], latest: dict | None = None, forecast_points: list[dict] | None = None) -> dict:
+    """台风影响摘要：影响范围 + 区域变化键。"""
+    if not latest:
+        return {
+            "near_land": False,
+            "impact_regions": [],
+            "impact_text": "",
+            "region_key": "far",
+        }
+    try:
+        la = float(latest.get("lat"))
+        lo = float(latest.get("lon"))
+    except Exception:
+        return {
+            "near_land": False,
+            "impact_regions": [],
+            "impact_text": "",
+            "region_key": "far",
+        }
+
+    near = is_near_china_coast_or_land(la, lo)
+    regions = top_impact_cities(la, lo, limit=2, max_km=300.0) if near else []
+
+    # 结合临近预报点，补充下一影响区（仅 1 个，且不同于当前）
+    next_region = ""
+    if near and forecast_points:
+        for fp in forecast_points[:4]:
+            try:
+                fla = float(fp.get("lat")); flo = float(fp.get("lon"))
+            except Exception:
+                continue
+            if not is_near_china_coast_or_land(fla, flo):
+                continue
+            cands = top_impact_cities(fla, flo, limit=1, max_km=300.0)
+            if cands and cands[0] not in regions:
+                next_region = cands[0]
+                break
+
+    impact_regions = list(regions)
+    if next_region and next_region not in impact_regions and len(impact_regions) < 2:
+        impact_regions.append(next_region)
+
+    impact_text = "、".join(impact_regions)
+    region_key = "|".join(impact_regions) if impact_regions else ("near" if near else "far")
     return {
-        "current": current,
-        "current_label": format_region_name(current) if current else "",
-        "regions": focus,
-        "regions_label": [format_region_name(x) for x in focus],
-        "upcoming": upcoming[:6],
-        "upcoming_label": [format_region_name(x) for x in upcoming[:6]],
+        "near_land": near,
+        "impact_regions": impact_regions,
+        "impact_text": impact_text,
+        "region_key": region_key,
+        # 兼容旧字段
+        "current": regions[0] if regions else "",
+        "current_label": regions[0] if regions else "",
+        "upcoming_label": [next_region] if next_region else [],
+        "regions_label": impact_regions,
     }
+

@@ -110,7 +110,7 @@ class DisasterAlertPlugin(Star):
             f"地震推送：{'开' if eq.get('enabled', True) else '关'}（阈值 M{eq.get('min_magnitude', 4.5)}）",
             f"台风推送：{'开' if ty.get('enabled', True) else '关'}",
             f"海啸/海洋推送：{'开' if ts.get('enabled', True) else '关'}",
-            f"极危红色天气：{'开' if cw.get('enabled', True) else '关'}（默认图片，失败降级文字）",
+            f"极危红色天气：{'开' if cw.get('enabled', True) else '关'}（默认图片；同省合并：{'开' if cw.get('merge_by_province', True) else '关'}）",
             "普通极端天气：不主动推送（请用 /天气 北京）",
             f"已记忆事件：{len(self.state._data.get('seen', {}))}",
             f"基线：{'已建立' if self.state.bootstrapped else '未建立'}",
@@ -349,6 +349,7 @@ class DisasterAlertPlugin(Star):
                     self.http,
                     enabled=True,
                     keywords=self._split_keywords(cw_cfg.get("keywords", "")),
+                    merge=bool(cw_cfg.get("merge_by_province", True)),
                 )
             )
 
