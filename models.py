@@ -33,6 +33,13 @@ class DisasterEvent:
     def fingerprint(self) -> str:
         return f"{self.source}:{self.event_id}"
 
+    def content_fingerprint(self) -> str:
+        """基于可见文案的去重键，防止相同内容反复推送。"""
+        import hashlib
+        body = self.format_message().strip()
+        digest = hashlib.sha1(body.encode('utf-8')).hexdigest()[:16]
+        return f"content:{digest}"
+
     def format_message(self) -> str:
         """推送正文：不输出来源链接与数据源名称。"""
         lines = [f"【{self.category}】{self.title}"]

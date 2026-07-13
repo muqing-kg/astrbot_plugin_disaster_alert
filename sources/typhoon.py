@@ -83,13 +83,16 @@ async def fetch_typhoons(
             continue
 
         # 以最新路径点作为事件，路径更新即新推送
-        point_id = str(latest.get("point_id") or latest.get("time_code") or "")
-        event_id = f"typhoon-{info['tid']}-{point_id}"
-        intensity = latest.get("intensity") or ""
+        # 用业务字段做稳定 ID，避免 point_id 异常导致重复推
+        time_code = str(latest.get("time_code") or latest.get("time_text") or "")
+        lat = latest.get("lat")
+        lon = latest.get("lon")
         wind = latest.get("wind")
         pressure = latest.get("pressure")
-        lon = latest.get("lon")
-        lat = latest.get("lat")
+        intensity = latest.get("intensity") or ""
+        event_id = (
+            f"typhoon-{info['tid']}-{time_code}-{lat}-{lon}-{wind}-{pressure}-{intensity}"
+        )
         move = latest.get("move")
         speed = latest.get("speed")
         intensity_cn = intensity_cn_with_wind(str(intensity), wind)

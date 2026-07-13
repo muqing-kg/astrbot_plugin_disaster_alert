@@ -244,7 +244,10 @@ class DisasterAlertPlugin(Star):
             if not events:
                 return 0
 
-            fps = [e.fingerprint() for e in events]
+            fps = []
+            for e in events:
+                fps.append(e.fingerprint())
+                fps.append(e.content_fingerprint())
             if (
                 not self.state.bootstrapped
                 and self.config.get("startup_skip_history", True)
@@ -258,7 +261,13 @@ class DisasterAlertPlugin(Star):
             if not self.state.bootstrapped:
                 self.state.mark_bootstrapped()
 
-            new_events = [e for e in events if not self.state.has(e.fingerprint())]
+            new_events = []
+            for e in events:
+                fp = e.fingerprint()
+                cfp = e.content_fingerprint()
+                if self.state.has(fp) or self.state.has(cfp):
+                    continue
+                new_events.append(e)
             if not new_events:
                 return 0
 
@@ -269,23 +278,25 @@ class DisasterAlertPlugin(Star):
 
             targets = self._target_sessions()
             if not targets:
-                self.state.mark_many([e.fingerprint() for e in to_push])
+                self.state.mark_many([x for e in to_push for x in (e.fingerprint(), e.content_fingerprint())])
                 logger.warning("有新事件但未配置 target_groups，已记录未推送")
                 return 0
 
             pushed = 0
             for ev in to_push:
                 ok = await self._broadcast(targets, ev)
+                # 事件指纹 + 文案指纹都记入，避免同文反复刷
+                self.state.mark_many([ev.fingerprint(), ev.content_fingerprint()])
                 if ok:
-                    self.state.mark(ev.fingerprint())
                     pushed += 1
                 else:
-                    logger.warning("推送失败，保留待重试: %s", ev.fingerprint())
+                    # 即使平台返回失败，也已去重，防止每轮重推刷屏
+                    logger.warning("推送可能失败，但已记入去重避免刷屏: %s", ev.fingerprint())
                 await asyncio.sleep(0.4)
 
             overflow = new_events[max_n:]
             if overflow:
-                self.state.mark_many([e.fingerprint() for e in overflow])
+                self.state.mark_many([x for e in overflow for x in (e.fingerprint(), e.content_fingerprint())])
                 logger.info("本轮超额 %d 条已记入已读", len(overflow))
 
             if pushed:
