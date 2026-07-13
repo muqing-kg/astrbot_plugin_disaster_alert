@@ -432,9 +432,8 @@ class DisasterAlertPlugin(Star):
         else:
             raw_items = [str(raw).strip()] if str(raw).strip() else []
 
-        prefix = str(self.config.get("platform_prefix", "aiocqhttp:GroupMessage") or "").strip()
-        if not prefix:
-            prefix = "aiocqhttp:GroupMessage"
+        # 纯群号默认按 QQ 群会话拼接；完整会话 ID 原样使用
+        prefix = "aiocqhttp:GroupMessage"
 
         sessions: list[str] = []
         for s in raw_items:

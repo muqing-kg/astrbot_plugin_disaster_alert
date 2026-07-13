@@ -11,18 +11,14 @@
     "default": 120,
     "hint": "建议 60~300"
   },
-  "platform_prefix": {
-    "description": "群会话前缀",
-    "type": "string",
-    "default": "aiocqhttp:GroupMessage",
-    "hint": "纯群号会拼成：前缀:群号"
-  },
   "target_groups": {
     "description": "推送目标群",
     "type": "list",
-    "items": { "type": "string" },
+    "items": {
+      "type": "string"
+    },
     "default": [],
-    "hint": "群号或完整会话 ID，如 aiocqhttp:GroupMessage:123456789"
+    "hint": "填写群号（如 123456789）或完整会话 ID（如 aiocqhttp:GroupMessage:123456789）"
   },
   "startup_skip_history": {
     "description": "启动时跳过历史",
