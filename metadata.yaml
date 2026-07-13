@@ -3,4 +3,4 @@ display_name: 灾害及时推送与天气卡片
 desc: 国内地震/台风/海啸海洋/极危红色天气主动推送；支持 /天气 北京 查询天气卡片。四类推送可分别开关。
 version: v1.2.0
 author: 云霄
-repo: "https://github.com/muqing-kg/astrbot_plugin_disaster_alert"
+repo: https://github.com/muqing-kg/astrbot_plugin_disaster_alert
