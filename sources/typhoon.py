@@ -96,23 +96,19 @@ async def fetch_typhoons(
 
         impact = summarize_typhoon_impact(points if isinstance(points, list) else [], latest, forecast_points if isinstance(forecast_points, list) else [])
         parts = []
-        cur_label = impact.get("current_label") or impact.get("current")
-        if cur_label:
-            parts.append(f"当前靠近 {cur_label}")
         if pressure is not None:
             parts.append(f"中心气压 {pressure} hPa")
         if move or speed is not None:
             parts.append(f"移向移速 {move or '-'} {speed if speed is not None else '-'} km/h")
-        upcoming = impact.get("upcoming_label") or []
-        focus = impact.get("regions_label") or impact.get("regions") or []
-        # 重点关注去掉即将过境已列出的，避免重复
-        focus_only = [x for x in focus if x not in set(upcoming)]
-        if upcoming:
-            parts.append("即将过境：" + "、".join(upcoming[:6]))
-        if focus_only:
-            parts.append("重点关注：" + "、".join(focus_only[:6]))
-        elif focus and not upcoming:
-            parts.append("重点关注：" + "、".join(focus[:6]))
+        # 只给下一站（即将过境取第 1 个）
+        upcoming = impact.get("upcoming_label") or impact.get("upcoming") or []
+        next_stop = ""
+        for x in upcoming:
+            if x and x != (impact.get("current_label") or impact.get("current")):
+                next_stop = x
+                break
+        if next_stop:
+            parts.append(f"即将过境：{next_stop}")
 
         events.append(
             DisasterEvent(
@@ -122,7 +118,7 @@ async def fetch_typhoons(
                 title=f"台风 {info['cname'] or info['ename']} 路径更新",
                 summary="；".join(parts),
                 occurred_at=str(latest.get("time_text") or latest.get("time_code") or ""),
-                location=((impact.get("current_label") or impact.get("current") or "") + (f"（{lon}E, {lat}N）" if lon is not None and lat is not None else "")),
+                location=(impact.get("current_label") or impact.get("current") or ""),
 
                 level=intensity_cn,
                 url=TYPHOON_PAGE,
