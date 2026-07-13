@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from .font_util import get_font
 
 if TYPE_CHECKING:
     from .sources.region_weather import RegionWeather
@@ -427,15 +428,7 @@ def load_fonts() -> dict[str, Any]:
 
 
 def font(size: int, bold: bool = False):
-    cands = [r"C:\Windows\Fonts\msyhbd.ttc", r"C:\Windows\Fonts\msyh.ttc"] if bold else [r"C:\Windows\Fonts\msyh.ttc", r"C:\Windows\Fonts\msyhbd.ttc"]
-    cands += [r"C:\Windows\Fonts\simhei.ttf", r"C:\Windows\Fonts\simsun.ttc"]
-    for p in cands:
-        if os.path.exists(p):
-            try:
-                return ImageFont.truetype(p, size=size)
-            except Exception:
-                pass
-    return ImageFont.load_default()
+    return get_font(size=size, bold=bold)
 
 
 def text_w(draw, text, fnt) -> int:
