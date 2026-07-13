@@ -77,19 +77,23 @@ def _hazard_of(title: str, keywords: list[str]) -> str:
 
 
 def _area_short(title: str, location: str = "") -> str:
-    # 尽量取“xx市/县/区”短名
-    loc = (location or "").strip()
-    if loc:
-        # 去掉省级前缀
-        for p in PROVINCE_PREFIXES:
-            if loc.startswith(p):
-                loc = loc[len(p):]
-                break
-        loc = loc.replace("气象台", "").strip(" ·")
-        if loc:
-            return loc
-    m = re.search(r"([一-鿿]{2,12}(?:市|县|区|旗|州))", title)
-    return m.group(1) if m else "相关地区"
+    # 尽量取“xx市/县/区”短名，过滤水利厅/气象台等机构名
+    noise = ("气象台", "水利厅", "水利局", "应急管理局", "自然资源局", "和", "与", "发布", "气象风险", "红色预警信号", "红色预警")
+    text = f"{location} {title}"
+    for n in noise:
+        text = text.replace(n, " ")
+    # 优先 市+区县，再 市/区/县
+    m = re.search(r"([一-鿿]{2,8}市(?:[一-鿿]{1,8}(?:区|县|旗))?)", text)
+    if m:
+        return m.group(1)
+    m = re.search(r"([一-鿿]{2,10}(?:区|县|旗|自治州|州))", text)
+    if m:
+        val = m.group(1)
+        if any(bad in val for bad in ("水利", "气象", "应急", "自然")):
+            return "相关地区"
+        return val
+    return "相关地区"
+
 
 
 async def fetch_critical_life_alerts(
@@ -182,9 +186,14 @@ async def fetch_critical_life_alerts(
         items = sorted(items, key=lambda x: x.get("time") or "", reverse=True)
         areas = []
         for it in items:
-            a = it.get("area") or ""
-            if a and a not in areas:
-                areas.append(a)
+            a = (it.get("area") or "").strip()
+            if not a or a in areas:
+                continue
+            if a in {"相关地区", prov}:
+                continue
+            if any(bad in a for bad in ("水利", "气象", "应急", "自然", "厅", "局")):
+                continue
+            areas.append(a)
             if len(areas) >= 6:
                 break
         latest_time = items[0].get("time") or ""
