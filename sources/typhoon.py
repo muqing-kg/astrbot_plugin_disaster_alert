@@ -9,7 +9,7 @@ from astrbot.api import logger
 
 from ..http_client import HttpClient
 from ..models import DisasterEvent
-from ..geo_utils import is_china_related_typhoon, summarize_typhoon_impact
+from ..geo_utils import is_china_related_typhoon, summarize_typhoon_impact, intensity_cn_with_wind, nearest_city
 
 TYPHOON_LIST_URL = "https://typhoon.nmc.cn/weatherservice/typhoon/jsons/list_default"
 TYPHOON_VIEW_URL = "https://typhoon.nmc.cn/weatherservice/typhoon/jsons/view_{tid}"
@@ -85,26 +85,22 @@ async def fetch_typhoons(
         point_id = str(latest.get("point_id") or latest.get("time_code") or "")
         event_id = f"typhoon-{info['tid']}-{point_id}"
         intensity = latest.get("intensity") or ""
-        intensity_cn = INTENSITY_MAP.get(str(intensity), str(intensity) or "未知")
         wind = latest.get("wind")
         pressure = latest.get("pressure")
         lon = latest.get("lon")
         lat = latest.get("lat")
         move = latest.get("move")
         speed = latest.get("speed")
+        intensity_cn = intensity_cn_with_wind(str(intensity), wind)
 
-        parts = [f"强度 {intensity_cn}"]
-        if wind is not None:
-            parts.append(f"近中心风速 {wind} m/s")
+        impact = summarize_typhoon_impact(points if isinstance(points, list) else [], latest)
+        parts = []
+        if impact.get("current"):
+            parts.append(f"当前靠近 {impact['current']}")
         if pressure is not None:
             parts.append(f"中心气压 {pressure} hPa")
-        if lon is not None and lat is not None:
-            parts.append(f"中心位置 {lon}E, {lat}N")
         if move or speed is not None:
             parts.append(f"移向移速 {move or '-'} {speed if speed is not None else '-'} km/h")
-        impact = summarize_typhoon_impact(points if isinstance(points, list) else [], latest)
-        if impact.get("current"):
-            parts.insert(0, f"当前靠近 {impact['current']}")
         if impact.get("regions"):
             parts.append("重点关注：" + "、".join(impact["regions"][:6]))
 
