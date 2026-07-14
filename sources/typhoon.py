@@ -84,11 +84,15 @@ async def fetch_typhoons(
         lv = impact.get("wind_level")
         event_id = f"typhoon-{info['tid']}-{region_key}-L{lv}"
 
-        parts = [f"影响范围：{impact_text}"]
+        # 分行文案：影响范围单独一行，气压/移速用「实况」前缀
+        summary_lines = [f"影响范围：{impact_text}"]
+        status_bits = []
         if pressure is not None:
-            parts.append(f"中心气压 {pressure} hPa")
+            status_bits.append(f"中心气压 {pressure} hPa")
         if move or speed is not None:
-            parts.append(f"移向移速 {move or '-'} {speed if speed is not None else '-'} km/h")
+            status_bits.append(f"移向移速 {move or '-'} {speed if speed is not None else '-'} km/h")
+        if status_bits:
+            summary_lines.append("实况：" + "；".join(status_bits))
 
         cname = info.get("cname") or info.get("ename") or "台风"
         events.append(
@@ -96,8 +100,8 @@ async def fetch_typhoons(
                 source="中央气象台台风网",
                 category="台风动态",
                 event_id=event_id,
-                title=f"台风 {cname} 影响更新",
-                summary="；".join(parts),
+                title=f"台风 {cname} 最新动向",
+                summary="\n".join(summary_lines),
                 occurred_at=str(latest.get("time_text") or latest.get("time_code") or ""),
                 location="",  # 不单独输出地点，只在 summary 写影响范围
                 level=intensity_cn,
