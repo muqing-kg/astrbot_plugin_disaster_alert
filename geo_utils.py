@@ -321,10 +321,11 @@ def is_near_china_coast_or_land(lat: float, lon: float) -> bool:
     return True
 
 
-def top_impact_cities(lat: float, lon: float, *, wind_ms=None, limit: int = 3) -> list[tuple[str, float]]:
+def top_impact_cities(lat: float, lon: float, *, wind_ms=None, limit: int = 3, min_level: int = 8) -> list[tuple[str, float]]:
     """按风力半径+距离，选出当前最可能受实质影响的城市。"""
     lv = wind_level_number(wind_ms)
-    if lv is None or lv < 8:
+    threshold = max(1, int(min_level or 8))
+    if lv is None or lv < threshold:
         return []
     if lv >= 12:
         max_km, hard_km = 420.0, 380.0
@@ -376,16 +377,16 @@ def format_lat_lon_cn(lat: float, lon: float) -> str:
 
 def format_center_position(lat: float, lon: float, *, ashore: bool, nearest_city: str, dist_km: float | None) -> str:
     """
-    海上贴岸：中心位置：北纬34.7°，东经118.7°（距大陆最近约 40 公里）
+    海上贴岸：中心位置：北纬34.7°，东经118.7°（距大陆最近约 40 公里，估算）
     已上岸：  中心位置：北纬34.7°，东经118.7°（山东省·临沂市附近）
     """
     base = f"中心位置：{format_lat_lon_cn(lat, lon)}"
     if ashore and nearest_city:
         return f"{base}（{nearest_city}附近）"
     if dist_km is not None:
-        # 四舍五入到整数公里
+        # 四舍五入到整数公里；锚点估算，文案加约
         d = max(0, int(round(dist_km)))
-        return f"{base}（距大陆最近约 {d} 公里）"
+        return f"{base}（距大陆最近约 {d} 公里，估算）"
     return base
 
 
@@ -393,6 +394,8 @@ def summarize_typhoon_impact(
     points: list[dict],
     latest: dict | None = None,
     forecast_points: list[dict] | None = None,
+    *,
+    min_wind_level: int = 8,
 ) -> dict:
     """只根据当前实况：够近+够强+有明确影响区 才 should_report。
 
@@ -400,6 +403,7 @@ def summarize_typhoon_impact(
     额外返回中心位置文案：贴岸写距陆距离，上岸写城市附近。
     """
     _ = points, forecast_points
+    threshold = max(1, int(min_wind_level or 8))
     empty = {
         "should_report": False,
         "near_land": False,
@@ -427,7 +431,7 @@ def summarize_typhoon_impact(
     # 距离很近视为已上岸/陆地附近
     ashore = bool(dist_km is not None and dist_km <= 25)
 
-    if not near or lv is None or lv < 8:
+    if not near or lv is None or lv < threshold:
         return {
             "should_report": False,
             "near_land": near,
@@ -441,7 +445,7 @@ def summarize_typhoon_impact(
             "center_position": "",
         }
 
-    pairs = top_impact_cities(la, lo, wind_ms=wind, limit=3)
+    pairs = top_impact_cities(la, lo, wind_ms=wind, limit=3, min_level=threshold)
     if not pairs:
         return {
             "should_report": False,

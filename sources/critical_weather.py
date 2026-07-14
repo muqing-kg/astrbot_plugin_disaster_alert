@@ -2,6 +2,7 @@
 
 默认不推送普通极端天气（橙/黄/蓝），避免全国群刷屏。
 暴雨季会对同省同类型做合并，减少连发刷屏。
+首次全量通报；地区集合扩大时用「新增地区」专用文案。
 """
 
 from __future__ import annotations
@@ -64,7 +65,6 @@ def _province_of(title: str, location: str = "") -> str:
     for p in sorted(PROVINCE_PREFIXES, key=len, reverse=True):
         if p in text:
             return p
-    # 兜底：取地点前缀
     loc = (location or "").strip()
     if not loc:
         return "多地"
@@ -79,12 +79,13 @@ def _hazard_of(title: str, keywords: list[str]) -> str:
 
 
 def _area_short(title: str, location: str = "") -> str:
-    # 尽量取“xx市/县/区”短名，过滤水利厅/气象台等机构名
-    noise = ("气象台", "水利厅", "水利局", "应急管理局", "自然资源局", "和", "与", "发布", "气象风险", "红色预警信号", "红色预警")
+    noise = (
+        "气象台", "水利厅", "水利局", "应急管理局", "自然资源局",
+        "和", "与", "发布", "气象风险", "红色预警信号", "红色预警",
+    )
     text = f"{location} {title}"
     for n in noise:
         text = text.replace(n, " ")
-    # 优先 市+区县，再 市/区/县
     m = re.search(r"([一-鿿]{2,8}市(?:[一-鿿]{1,8}(?:区|县|旗))?)", text)
     if m:
         return m.group(1)
@@ -97,8 +98,6 @@ def _area_short(title: str, location: str = "") -> str:
     return "相关地区"
 
 
-
-
 def _parse_alert_time(text: str) -> datetime | None:
     s = str(text or "").strip().replace("/", "-")
     for n, fmt in ((19, "%Y-%m-%d %H:%M:%S"), (16, "%Y-%m-%d %H:%M"), (10, "%Y-%m-%d")):
@@ -109,9 +108,10 @@ def _parse_alert_time(text: str) -> datetime | None:
     return None
 
 
-def _areas_fingerprint(areas: list[str], alert_ids: list[str]) -> str:
-    key = "|".join(sorted(a for a in areas if a)) + "#" + "|".join(sorted(str(i) for i in alert_ids if i))
+def _areas_fingerprint(areas: list[str]) -> str:
+    key = "|".join(sorted(a for a in areas if a))
     return hashlib.sha1(key.encode("utf-8")).hexdigest()[:12]
+
 
 async def fetch_critical_life_alerts(
     client: HttpClient,
@@ -189,12 +189,17 @@ async def fetch_critical_life_alerts(
                 level="红色",
                 url=e["url"],
                 advice=CRITICAL_ADVICE,
-                raw=e,
+                raw={
+                    **e,
+                    "merge": False,
+                    "count": 1,
+                    "areas": [e["area"]] if e.get("area") and e["area"] != "相关地区" else [],
+                    "group_key": f"{e['province']}|{e['hazard']}",
+                },
             )
             for e in raw_events
         ]
 
-    # 合并：同省 + 同灾害类型 + 时间窗（默认 45 分钟）
     groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for e in raw_events:
         groups[(e["province"], e["hazard"])].append(e)
@@ -225,30 +230,33 @@ async def fetch_critical_life_alerts(
             if any(bad in a for bad in ("水利", "气象", "应急", "自然", "厅", "局")):
                 continue
             areas.append(a)
-            if len(areas) >= 8:
+            if len(areas) >= 12:
                 break
 
         latest_time = window_items[0].get("time") or ""
         alert_ids = [str(x.get("alert_id") or "") for x in window_items]
-        fp = _areas_fingerprint(areas, alert_ids)
+        # 仅按地区集合指纹：同区不重复，扩大后换指纹
+        fp = _areas_fingerprint(areas) if areas else _areas_fingerprint(alert_ids)
+        group_key = f"{prov}|{hazard}"
 
-        if len(window_items) == 1:
+        if len(window_items) == 1 and len(areas) <= 1:
             it = window_items[0]
             title = it["title"]
-            location = it["location"] or prov
+            location = it["location"] or (areas[0] if areas else prov)
             summary = "已达红色预警，可能严重威胁当地人身与财产安全。"
-            event_id = f"critical-{it['alert_id']}"
+            event_id = f"critical-{it['alert_id']}" if not areas else f"critical-merge-{prov}-{hazard}-{fp}"
+            count = 1
         else:
-            area_text = "、".join(areas[:6]) if areas else "多地"
-            more = f"{len(window_items)}地"
+            area_text = "、".join(areas[:8]) if areas else "多地"
+            more = f"{len(window_items)}条"
             title = f"{prov}多地发布{hazard}红色预警（{more}）"
-            location = f"{prov}：{area_text}"
+            location = f"{prov}：{area_text}" if areas else prov
             summary = (
                 f"近{window}分钟内共 {len(window_items)} 条红色{hazard}预警，"
                 "可能严重威胁当地人身与财产安全。"
             )
-            # 地区集合变化才换指纹，实现增量去重
             event_id = f"critical-merge-{prov}-{hazard}-{fp}"
+            count = len(window_items)
 
         events.append(
             DisasterEvent(
@@ -263,13 +271,15 @@ async def fetch_critical_life_alerts(
                 url=window_items[0].get("url") or NMC_PAGE,
                 advice=CRITICAL_ADVICE,
                 raw={
-                    "merge": len(window_items) > 1,
-                    "count": len(window_items),
+                    "merge": count > 1,
+                    "count": count,
                     "province": prov,
                     "hazard": hazard,
                     "areas": areas,
                     "alert_ids": alert_ids,
                     "window_minutes": window,
+                    "group_key": group_key,
+                    "areas_fp": fp,
                 },
             )
         )

@@ -30,6 +30,7 @@ async def fetch_typhoons(
     client: HttpClient,
     *,
     only_active: bool = True,
+    min_wind_level: int = 8,
 ) -> list[DisasterEvent]:
     try:
         data = await client.get_json(
@@ -53,7 +54,6 @@ async def fetch_typhoons(
         detail = await _fetch_detail(client, info["tid"])
         latest = detail.get("latest") if detail else None
         points = detail.get("points") if detail else []
-        forecast_points = detail.get("forecast_points") if detail else []
         # 仅保留路径影响中国近海/陆地的台风
         if points and not is_china_related_typhoon(points):
             continue
@@ -75,6 +75,7 @@ async def fetch_typhoons(
             points if isinstance(points, list) else [],
             latest,
             None,
+            min_wind_level=int(min_wind_level or 8),
         )
         if not impact.get("should_report"):
             continue

@@ -32,6 +32,30 @@
     "default": 8,
     "hint": "防止短时间刷屏"
   },
+  "quiet_hours": {
+    "description": "夜间静默",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "启用夜间静默",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后，静默时段只放行地震速报，其他及时推送暂缓"
+      },
+      "start_hour": {
+        "description": "静默开始小时（0-23）",
+        "type": "int",
+        "default": 23,
+        "hint": "例如 23 表示 23:00 起"
+      },
+      "end_hour": {
+        "description": "静默结束小时（0-23）",
+        "type": "int",
+        "default": 7,
+        "hint": "例如 7 表示 07:00 止；支持跨午夜"
+      }
+    }
+  },
   "earthquake": {
     "description": "地震及时推送",
     "type": "object",
@@ -64,6 +88,12 @@
         "description": "仅监测活动台风",
         "type": "bool",
         "default": true
+      },
+      "min_wind_level": {
+        "description": "最低风力等级（蒲福级）",
+        "type": "int",
+        "default": 8,
+        "hint": "默认 8 级。近岸且达到该风力、并有明确影响城市时才推送"
       }
     }
   },
@@ -109,7 +139,7 @@
         "description": "启用极危红色天气推送",
         "type": "bool",
         "default": true,
-        "hint": "开关：是否主动推送红色高危天气。默认发图片，失败降级文字"
+        "hint": "开关：是否主动推送红色高危天气。默认发图片，失败降级文字。同省同类型地区扩大时用「新增地区」文案"
       },
       "keywords": {
         "description": "高危类型关键词",
@@ -121,7 +151,7 @@
         "description": "同省同类型合并推送",
         "type": "bool",
         "default": true,
-        "hint": "开启后按时间窗合并同省同灾害红色预警；地区集合变化才会再推（增量）"
+        "hint": "开启后按时间窗合并同省同灾害红色预警；地区集合扩大才再推（新增地区）"
       },
       "merge_window_minutes": {
         "description": "合并时间窗（分钟）",
