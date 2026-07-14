@@ -354,6 +354,41 @@ def top_impact_cities(lat: float, lon: float, *, wind_ms=None, limit: int = 3) -
     return out
 
 
+def min_distance_to_china_land_km(lat: float, lon: float) -> tuple[float | None, str]:
+    """估算中心到中国陆地城市锚点的最近距离，返回 (km, 最近省·市)。"""
+    best_d = None
+    best_name = ""
+    for name, pla, plo in CITY_ANCHORS:
+        if name.endswith("海域"):
+            continue
+        d = haversine_km(lat, lon, pla, plo)
+        if best_d is None or d < best_d:
+            best_d = d
+            best_name = format_region_name(name)
+    return best_d, best_name
+
+
+def format_lat_lon_cn(lat: float, lon: float) -> str:
+    lat_s = f"{'北纬' if lat >= 0 else '南纬'}{abs(lat):.1f}°"
+    lon_s = f"{'东经' if lon >= 0 else '西经'}{abs(lon):.1f}°"
+    return f"{lat_s}，{lon_s}"
+
+
+def format_center_position(lat: float, lon: float, *, ashore: bool, nearest_city: str, dist_km: float | None) -> str:
+    """
+    海上贴岸：中心位置：北纬34.7°，东经118.7°（距大陆最近约 40 公里）
+    已上岸：  中心位置：北纬34.7°，东经118.7°（山东省·临沂市附近）
+    """
+    base = f"中心位置：{format_lat_lon_cn(lat, lon)}"
+    if ashore and nearest_city:
+        return f"{base}（{nearest_city}附近）"
+    if dist_km is not None:
+        # 四舍五入到整数公里
+        d = max(0, int(round(dist_km)))
+        return f"{base}（距大陆最近约 {d} 公里）"
+    return base
+
+
 def summarize_typhoon_impact(
     points: list[dict],
     latest: dict | None = None,
@@ -362,15 +397,20 @@ def summarize_typhoon_impact(
     """只根据当前实况：够近+够强+有明确影响区 才 should_report。
 
     明确不用预测；远海（哪怕很强）不报。
+    额外返回中心位置文案：贴岸写距陆距离，上岸写城市附近。
     """
     _ = points, forecast_points
     empty = {
         "should_report": False,
         "near_land": False,
+        "ashore": False,
         "impact_regions": [],
         "impact_text": "",
         "region_key": "skip",
         "wind_level": None,
+        "dist_km": None,
+        "nearest_city": "",
+        "center_position": "",
     }
     if not latest:
         return empty
@@ -383,14 +423,22 @@ def summarize_typhoon_impact(
     wind = latest.get("wind")
     lv = wind_level_number(wind)
     near = is_near_china_coast_or_land(la, lo)
+    dist_km, nearest_city = min_distance_to_china_land_km(la, lo)
+    # 距离很近视为已上岸/陆地附近
+    ashore = bool(dist_km is not None and dist_km <= 25)
+
     if not near or lv is None or lv < 8:
         return {
             "should_report": False,
             "near_land": near,
+            "ashore": ashore,
             "impact_regions": [],
             "impact_text": "",
             "region_key": "skip",
             "wind_level": lv,
+            "dist_km": dist_km,
+            "nearest_city": nearest_city,
+            "center_position": "",
         }
 
     pairs = top_impact_cities(la, lo, wind_ms=wind, limit=3)
@@ -398,21 +446,36 @@ def summarize_typhoon_impact(
         return {
             "should_report": False,
             "near_land": near,
+            "ashore": ashore,
             "impact_regions": [],
             "impact_text": "",
             "region_key": "skip",
             "wind_level": lv,
+            "dist_km": dist_km,
+            "nearest_city": nearest_city,
+            "center_position": "",
         }
 
     regions = [name for name, _ in pairs]
     impact_text = "、".join(regions)
+    center_position = format_center_position(
+        la,
+        lo,
+        ashore=ashore,
+        nearest_city=nearest_city or regions[0],
+        dist_km=dist_km,
+    )
     return {
         "should_report": True,
         "near_land": True,
+        "ashore": ashore,
         "impact_regions": regions,
         "impact_text": impact_text,
         "region_key": "|".join(regions),
         "wind_level": lv,
+        "dist_km": dist_km,
+        "nearest_city": nearest_city,
+        "center_position": center_position,
         "current_label": regions[0],
         "regions_label": regions,
         "upcoming_label": [],
