@@ -84,8 +84,8 @@ async def fetch_typhoons(
         lv = impact.get("wind_level")
         event_id = f"typhoon-{info['tid']}-{region_key}-L{lv}"
 
-        # 分行文案：影响范围单独一行，气压/移速用「实况」前缀
-        summary_lines = [f"影响范围：{impact_text}"]
+        # 分行文案：先实况，再影响范围
+        summary_lines = []
         status_bits = []
         if pressure is not None:
             status_bits.append(f"中心气压 {pressure} hPa")
@@ -93,6 +93,7 @@ async def fetch_typhoons(
             status_bits.append(f"移向移速 {move or '-'} {speed if speed is not None else '-'} km/h")
         if status_bits:
             summary_lines.append("实况：" + "；".join(status_bits))
+        summary_lines.append(f"影响范围：{impact_text}")
 
         cname = info.get("cname") or info.get("ename") or "台风"
         events.append(
