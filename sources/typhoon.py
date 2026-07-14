@@ -99,7 +99,7 @@ async def fetch_typhoons(
                 title=f"台风 {cname} 影响更新",
                 summary="；".join(parts),
                 occurred_at=str(latest.get("time_text") or latest.get("time_code") or ""),
-                location=impact_text,
+                location="",  # 不单独输出地点，只在 summary 写影响范围
                 level=intensity_cn,
                 url=TYPHOON_PAGE,
                 advice=(
