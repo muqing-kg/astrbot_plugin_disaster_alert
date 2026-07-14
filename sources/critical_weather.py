@@ -6,8 +6,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections import defaultdict
+from datetime import datetime, timedelta
 from typing import Any
 
 from astrbot.api import logger
@@ -96,6 +98,21 @@ def _area_short(title: str, location: str = "") -> str:
 
 
 
+
+def _parse_alert_time(text: str) -> datetime | None:
+    s = str(text or "").strip().replace("/", "-")
+    for n, fmt in ((19, "%Y-%m-%d %H:%M:%S"), (16, "%Y-%m-%d %H:%M"), (10, "%Y-%m-%d")):
+        try:
+            return datetime.strptime(s[:n], fmt)
+        except Exception:
+            continue
+    return None
+
+
+def _areas_fingerprint(areas: list[str], alert_ids: list[str]) -> str:
+    key = "|".join(sorted(a for a in areas if a)) + "#" + "|".join(sorted(str(i) for i in alert_ids if i))
+    return hashlib.sha1(key.encode("utf-8")).hexdigest()[:12]
+
 async def fetch_critical_life_alerts(
     client: HttpClient,
     *,
@@ -103,6 +120,7 @@ async def fetch_critical_life_alerts(
     keywords: list[str] | None = None,
     page_size: int = 100,
     merge: bool = True,
+    merge_window_minutes: int = 45,
 ) -> list[DisasterEvent]:
     if not enabled:
         return []
@@ -176,16 +194,29 @@ async def fetch_critical_life_alerts(
             for e in raw_events
         ]
 
-    # 合并：同省 + 同灾害类型
+    # 合并：同省 + 同灾害类型 + 时间窗（默认 45 分钟）
     groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for e in raw_events:
         groups[(e["province"], e["hazard"])].append(e)
 
+    window = max(5, int(merge_window_minutes or 45))
     events: list[DisasterEvent] = []
     for (prov, hazard), items in groups.items():
-        items = sorted(items, key=lambda x: x.get("time") or "", reverse=True)
-        areas = []
+        enriched = []
         for it in items:
+            dt = _parse_alert_time(it.get("time") or "")
+            enriched.append((dt, it))
+        timed = [x for x in enriched if x[0] is not None]
+        if timed:
+            latest_dt = max(x[0] for x in timed)
+            cutoff = latest_dt - timedelta(minutes=window)
+            window_items = [it for dt, it in enriched if dt is None or dt >= cutoff]
+        else:
+            window_items = items
+
+        window_items = sorted(window_items, key=lambda x: x.get("time") or "", reverse=True)
+        areas: list[str] = []
+        for it in window_items:
             a = (it.get("area") or "").strip()
             if not a or a in areas:
                 continue
@@ -194,25 +225,30 @@ async def fetch_critical_life_alerts(
             if any(bad in a for bad in ("水利", "气象", "应急", "自然", "厅", "局")):
                 continue
             areas.append(a)
-            if len(areas) >= 6:
+            if len(areas) >= 8:
                 break
-        latest_time = items[0].get("time") or ""
-        # 稳定去重键：省+类型+日期小时（同小时内合并为一条）
-        hour_key = latest_time[:13] if len(latest_time) >= 13 else latest_time
-        if len(items) == 1:
-            it = items[0]
+
+        latest_time = window_items[0].get("time") or ""
+        alert_ids = [str(x.get("alert_id") or "") for x in window_items]
+        fp = _areas_fingerprint(areas, alert_ids)
+
+        if len(window_items) == 1:
+            it = window_items[0]
             title = it["title"]
             location = it["location"] or prov
             summary = "已达红色预警，可能严重威胁当地人身与财产安全。"
             event_id = f"critical-{it['alert_id']}"
         else:
-            area_text = "、".join(areas[:5])
-            more = f"等{len(items)}地" if len(items) > 5 else f"{len(items)}地"
+            area_text = "、".join(areas[:6]) if areas else "多地"
+            more = f"{len(window_items)}地"
             title = f"{prov}多地发布{hazard}红色预警（{more}）"
             location = f"{prov}：{area_text}"
-            summary = f"共 {len(items)} 条红色{hazard}预警，可能严重威胁当地人身与财产安全。"
-            # 同省同类型同小时只推一条
-            event_id = f"critical-merge-{prov}-{hazard}-{hour_key}"
+            summary = (
+                f"近{window}分钟内共 {len(window_items)} 条红色{hazard}预警，"
+                "可能严重威胁当地人身与财产安全。"
+            )
+            # 地区集合变化才换指纹，实现增量去重
+            event_id = f"critical-merge-{prov}-{hazard}-{fp}"
 
         events.append(
             DisasterEvent(
@@ -224,18 +260,18 @@ async def fetch_critical_life_alerts(
                 occurred_at=latest_time,
                 location=location,
                 level="红色",
-                url=items[0].get("url") or NMC_PAGE,
+                url=window_items[0].get("url") or NMC_PAGE,
                 advice=CRITICAL_ADVICE,
                 raw={
-                    "merge": len(items) > 1,
-                    "count": len(items),
+                    "merge": len(window_items) > 1,
+                    "count": len(window_items),
                     "province": prov,
                     "hazard": hazard,
                     "areas": areas,
-                    "alert_ids": [x.get("alert_id") for x in items],
+                    "alert_ids": alert_ids,
+                    "window_minutes": window,
                 },
             )
         )
-    # 新在前
     events.sort(key=lambda e: e.occurred_at or "", reverse=True)
     return events

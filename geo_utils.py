@@ -284,18 +284,6 @@ def format_region_name(city_or_region: str) -> str:
     return name
 
 
-def is_near_china_coast_or_land(lat: float, lon: float) -> bool:
-    """是否接近中国近岸/陆地影响区（粗判，用于决定是否播报地区）。"""
-    if not in_china_bbox(lat, lon):
-        return False
-    # 远离陆地的远海：大致东经 125 以东且纬度 20~33 的开阔洋面
-    if lon >= 126 and 18 <= lat <= 34:
-        return False
-    if lon >= 128 and lat < 40:
-        return False
-    return True
-
-
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     r = 6371.0
     p1, p2 = math.radians(lat1), math.radians(lat2)
@@ -305,85 +293,128 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * r * math.asin(min(1.0, math.sqrt(a)))
 
 
-def top_impact_cities(lat: float, lon: float, *, limit: int = 2, max_km: float = 280.0) -> list[str]:
-    """按距离选取受影响最重的 1~2 个城市（省·市）。"""
-    ranked = []
+def wind_level_number(wind_ms) -> int | None:
+    try:
+        v = float(wind_ms)
+    except (TypeError, ValueError):
+        return None
+    table = [
+        (0.2, 0), (1.5, 1), (3.3, 2), (5.4, 3), (7.9, 4), (10.7, 5),
+        (13.8, 6), (17.1, 7), (20.7, 8), (24.4, 9), (28.4, 10),
+        (32.6, 11), (36.9, 12), (41.4, 13), (46.1, 14), (50.9, 15),
+        (56.0, 16), (61.2, 17),
+    ]
+    for upper, lv in table:
+        if v <= upper:
+            return lv
+    return 17
+
+
+def is_near_china_coast_or_land(lat: float, lon: float) -> bool:
+    """是否接近中国近岸/陆地。远海（即使很强）不报。"""
+    if not in_china_bbox(lat, lon):
+        return False
+    if lon >= 126 and 18 <= lat <= 34:
+        return False
+    if lon >= 128 and lat < 40:
+        return False
+    return True
+
+
+def top_impact_cities(lat: float, lon: float, *, wind_ms=None, limit: int = 3) -> list[tuple[str, float]]:
+    """按风力半径+距离，选出当前最可能受实质影响的城市。"""
+    lv = wind_level_number(wind_ms)
+    if lv is None or lv < 8:
+        return []
+    if lv >= 12:
+        max_km, hard_km = 420.0, 380.0
+    elif lv >= 10:
+        max_km, hard_km = 340.0, 300.0
+    else:
+        max_km, hard_km = 260.0, 230.0
+
+    ranked: list[tuple[float, str]] = []
     for name, pla, plo in CITY_ANCHORS:
-        # 跳过纯海域标签，优先具体城市
         if name.endswith("海域"):
             continue
         d = haversine_km(lat, lon, pla, plo)
         if d <= max_km:
             ranked.append((d, name))
     ranked.sort(key=lambda x: x[0])
-    out = []
+
+    out: list[tuple[str, float]] = []
     for d, name in ranked:
+        if d > hard_km:
+            continue
         label = format_region_name(name)
-        if label and label not in out:
-            out.append(label)
+        if label and all(label != x[0] for x in out):
+            out.append((label, d))
         if len(out) >= limit:
             break
-    # 若近距没有城市，退回最近一个（可能是海域）
-    if not out:
-        name = nearest_city(lat, lon)
-        if name:
-            out = [format_region_name(name)]
     return out
 
 
-def summarize_typhoon_impact(points: list[dict], latest: dict | None = None, forecast_points: list[dict] | None = None) -> dict:
-    """台风影响摘要：影响范围 + 区域变化键。"""
+def summarize_typhoon_impact(
+    points: list[dict],
+    latest: dict | None = None,
+    forecast_points: list[dict] | None = None,
+) -> dict:
+    """只根据当前实况：够近+够强+有明确影响区 才 should_report。
+
+    明确不用预测；远海（哪怕很强）不报。
+    """
+    _ = points, forecast_points
+    empty = {
+        "should_report": False,
+        "near_land": False,
+        "impact_regions": [],
+        "impact_text": "",
+        "region_key": "skip",
+        "wind_level": None,
+    }
     if not latest:
-        return {
-            "near_land": False,
-            "impact_regions": [],
-            "impact_text": "",
-            "region_key": "far",
-        }
+        return empty
     try:
         la = float(latest.get("lat"))
         lo = float(latest.get("lon"))
     except Exception:
+        return empty
+
+    wind = latest.get("wind")
+    lv = wind_level_number(wind)
+    near = is_near_china_coast_or_land(la, lo)
+    if not near or lv is None or lv < 8:
         return {
-            "near_land": False,
+            "should_report": False,
+            "near_land": near,
             "impact_regions": [],
             "impact_text": "",
-            "region_key": "far",
+            "region_key": "skip",
+            "wind_level": lv,
         }
 
-    near = is_near_china_coast_or_land(la, lo)
-    regions = top_impact_cities(la, lo, limit=2, max_km=300.0) if near else []
+    pairs = top_impact_cities(la, lo, wind_ms=wind, limit=3)
+    if not pairs:
+        return {
+            "should_report": False,
+            "near_land": near,
+            "impact_regions": [],
+            "impact_text": "",
+            "region_key": "skip",
+            "wind_level": lv,
+        }
 
-    # 结合临近预报点，补充下一影响区（仅 1 个，且不同于当前）
-    next_region = ""
-    if near and forecast_points:
-        for fp in forecast_points[:4]:
-            try:
-                fla = float(fp.get("lat")); flo = float(fp.get("lon"))
-            except Exception:
-                continue
-            if not is_near_china_coast_or_land(fla, flo):
-                continue
-            cands = top_impact_cities(fla, flo, limit=1, max_km=300.0)
-            if cands and cands[0] not in regions:
-                next_region = cands[0]
-                break
-
-    impact_regions = list(regions)
-    if next_region and next_region not in impact_regions and len(impact_regions) < 2:
-        impact_regions.append(next_region)
-
-    impact_text = "、".join(impact_regions)
-    region_key = "|".join(impact_regions) if impact_regions else ("near" if near else "far")
+    regions = [name for name, _ in pairs]
+    impact_text = "、".join(regions)
     return {
-        "near_land": near,
-        "impact_regions": impact_regions,
+        "should_report": True,
+        "near_land": True,
+        "impact_regions": regions,
         "impact_text": impact_text,
-        "region_key": region_key,
-        # 兼容旧字段
-        "current": regions[0] if regions else "",
-        "current_label": regions[0] if regions else "",
-        "upcoming_label": [next_region] if next_region else [],
-        "regions_label": impact_regions,
+        "region_key": "|".join(regions),
+        "wind_level": lv,
+        "current_label": regions[0],
+        "regions_label": regions,
+        "upcoming_label": [],
     }
 

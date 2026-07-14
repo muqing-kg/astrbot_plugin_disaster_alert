@@ -61,8 +61,7 @@ async def fetch_typhoons(
             # 无详情/路径点时无法判断是否影响国内，跳过
             continue
 
-        # 仅在“影响区域变化”或“强度变化”时形成新事件，避免同城反复刷
-        time_code = str(latest.get("time_code") or latest.get("time_text") or "")
+        # 只报：近岸 + 风力>=8 + 有明确影响区；同影响范围不重复；远海不报（即使很强）
         lat = latest.get("lat")
         lon = latest.get("lon")
         wind = latest.get("wind")
@@ -75,41 +74,32 @@ async def fetch_typhoons(
         impact = summarize_typhoon_impact(
             points if isinstance(points, list) else [],
             latest,
-            forecast_points if isinstance(forecast_points, list) else [],
+            None,
         )
-        near_land = bool(impact.get("near_land"))
+        if not impact.get("should_report"):
+            continue
+
         impact_text = str(impact.get("impact_text") or "")
-        region_key = str(impact.get("region_key") or "far")
+        region_key = str(impact.get("region_key") or "impact")
+        lv = impact.get("wind_level")
+        event_id = f"typhoon-{info['tid']}-{region_key}-L{lv}"
 
-        # 去重键：同一台风 + 影响区域 + 强度/风力
-        event_id = f"typhoon-{info['tid']}-{region_key}-{intensity}-{wind}"
-
-        parts = []
-        if near_land and impact_text:
-            parts.append(f"影响范围：{impact_text}")
+        parts = [f"影响范围：{impact_text}"]
         if pressure is not None:
             parts.append(f"中心气压 {pressure} hPa")
         if move or speed is not None:
             parts.append(f"移向移速 {move or '-'} {speed if speed is not None else '-'} km/h")
 
-        # 标题：近岸用影响播报，远海仅强度变化时提示
         cname = info.get("cname") or info.get("ename") or "台风"
-        if near_land and impact_text:
-            title = f"台风 {cname} 影响更新"
-            location = impact_text
-        else:
-            title = f"台风 {cname} 动态"
-            location = "远海活动"
-
         events.append(
             DisasterEvent(
                 source="中央气象台台风网",
                 category="台风动态",
                 event_id=event_id,
-                title=title,
+                title=f"台风 {cname} 影响更新",
                 summary="；".join(parts),
                 occurred_at=str(latest.get("time_text") or latest.get("time_code") or ""),
-                location=location,
+                location=impact_text,
                 level=intensity_cn,
                 url=TYPHOON_PAGE,
                 advice=(
@@ -120,11 +110,12 @@ async def fetch_typhoons(
                     "list": info,
                     "latest": latest,
                     "points": points if isinstance(points, list) else [],
-                    "forecast_points": forecast_points if isinstance(forecast_points, list) else [],
                     "impact": impact,
                 },
             )
         )
+
+
     return events
 
 
